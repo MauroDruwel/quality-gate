@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tauri-ci:
+    uses: MauroDruwel/quality-gate/.github/workflows/tauri-ci.yml@main
+    with:
+      node-version: '22'
+      package-manager: 'pnpm'
+      run-cargo-test: true
+      run-frontend-test: true
+      strict: true

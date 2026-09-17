@@ -1,0 +1,20 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  tauri-release:
+    permissions:
+      contents: write
+    uses: MauroDruwel/quality-gate/.github/workflows/tauri-release.yml@main
+    with:
+      node-version: '22'
+      package-manager: 'pnpm'
+      draft: false
+      prerelease: false
+    secrets:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

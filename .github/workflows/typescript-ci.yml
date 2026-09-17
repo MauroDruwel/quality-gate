@@ -1,0 +1,70 @@
+name: TypeScript CI (Quality Gate)
+
+on:
+  workflow_call:
+    inputs:
+      node-versions:
+        description: "JSON array of Node versions"
+        required: false
+        default: '["20", "22"]'
+        type: string
+      package-manager:
+        description: "Package manager: pnpm or npm"
+        required: false
+        default: "pnpm"
+        type: string
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} Check & Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ${{ fromJson(inputs.node-versions) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        if: inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: ${{ inputs.package-manager }}
+
+      - name: Install dependencies
+        run: |
+          if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+            pnpm install --frozen-lockfile
+          else
+            npm ci
+          fi
+
+      - name: Typecheck
+        run: |
+          if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+            pnpm tsc --noEmit
+          else
+            npx tsc --noEmit
+          fi
+
+      - name: Lint
+        run: |
+          if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+            pnpm eslint .
+          else
+            npm run lint --if-present
+          fi
+
+      - name: Run Tests
+        run: |
+          if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+            pnpm test -- --run
+          else
+            npm test -- --run --if-present
+          fi
