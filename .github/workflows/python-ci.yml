@@ -3,11 +3,34 @@ name: Python CI (Quality Gate)
 on:
   workflow_call:
     inputs:
+      python-version:
+        description: "Single Python version to test (e.g. '3.12')"
+        required: false
+        type: string
       python-versions:
         description: "JSON array of Python versions"
         required: false
-        default: '["3.11", "3.12", "3.13"]'
         type: string
+      run-tests:
+        description: "Run pytest test suite"
+        required: false
+        default: true
+        type: boolean
+      run-lint:
+        description: "Run ruff linting"
+        required: false
+        default: true
+        type: boolean
+      run-format:
+        description: "Run ruff format check"
+        required: false
+        default: true
+        type: boolean
+      strict:
+        description: "Enforce strict zero-warning policy"
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   lint-and-test:
@@ -15,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ${{ fromJson(inputs.python-versions) }}
+        python-version: ${{ inputs.python-versions != '' && fromJson(inputs.python-versions) || (inputs.python-version != '' && fromJson(format('["{0}"]', inputs.python-version)) || fromJson('["3.11", "3.12", "3.13"]')) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,10 +57,13 @@ jobs:
           if [ -f pyproject.toml ]; then pip install -e .; fi
 
       - name: Ruff Lint
+        if: ${{ inputs.run-lint }}
         run: ruff check .
 
       - name: Ruff Format Check
+        if: ${{ inputs.run-format }}
         run: ruff format --check .
 
       - name: Run Tests
+        if: ${{ inputs.run-tests }}
         run: pytest
