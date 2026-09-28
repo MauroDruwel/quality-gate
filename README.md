@@ -26,7 +26,7 @@ The canonical software quality standards, architectural conventions, centralized
 
 | Pillar | Focus | Requirements |
 |---|---|---|
-| **1. Governance & Hygiene** | Open source cleanliness | Valid `README.md`, `LICENSE` (MIT © Mauro Druwel), `CHANGELOG.md`, comprehensive `.gitignore`, zero OS artifacts (`.DS_Store`). |
+| **1. Governance & Hygiene** | Open source cleanliness | Valid `README.md`, `LICENSE` (MIT © Mauro Druwel), `CHANGELOG.md`, `.github/pull_request_template.md`, comprehensive `.gitignore`, zero OS artifacts (`.DS_Store`). |
 | **2. Architecture & Tooling** | Robust foundation | Modern archetypes (Tauri v2 desktop, Python CustomTkinter / Tkinter desktop & background service daemons, TypeScript/Vite frontend, Rust Cargo, modern Python pyproject.toml), strictly committed lockfiles (`pnpm-lock.yaml`, `Cargo.lock`). |
 | **3. CI/CD & Automation** | Reusable central pipelines | Reusable GitHub Actions with concurrency cancellation, cross-platform matrix builds, and push/PR validation. |
 | **4. Type Safety & Strictness** | Zero-warning philosophy | Strict TypeScript (`tsc --noEmit`), Rust `cargo clippy -- -D warnings`, Python Ruff formatting & linting. |
