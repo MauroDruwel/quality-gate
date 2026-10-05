@@ -123,6 +123,23 @@ class ProjectAuditor:
             has_lint = (self.root / "eslint.config.js").exists() or (self.root / ".eslintrc.json").exists() or (self.root / ".eslintrc.js").exists()
             self.check(has_lint, "ESLint configuration present", "Frontend linter", section=sec)
 
+            # Check tauri config bundle identifier
+            tauri_conf = self.root / "src-tauri" / "tauri.conf.json"
+            valid_id = False
+            id_detail = "Missing tauri.conf.json"
+            if tauri_conf.exists():
+                try:
+                    tdata = json.loads(tauri_conf.read_text(errors="ignore"))
+                    bundle_id = tdata.get("identifier", "")
+                    if bundle_id and bundle_id != "com.tauri.dev":
+                        valid_id = True
+                        id_detail = f"Identifier: {bundle_id}"
+                    else:
+                        id_detail = f"Default or invalid identifier: '{bundle_id}'"
+                except Exception as e:
+                    id_detail = f"Malformed tauri.conf.json: {e}"
+            self.check(valid_id, "Tauri unique bundle identifier", id_detail, section=sec)
+
         elif self.project_type == "typescript":
             self.check((self.root / "package.json").exists(), "package.json present", section=sec)
             self.check((self.root / "tsconfig.json").exists(), "tsconfig.json present", "TypeScript compiler options", section=sec)
@@ -154,13 +171,17 @@ class ProjectAuditor:
             
             # Check if any workflow uses MQG or is MQG itself
             uses_mqg = False
+            mqg_archetype_match = False
             is_mqg_itself = self.root.name == "quality-gate" or (self.remote_repo and "quality-gate" in self.remote_repo)
+            expected_action = f"{self.project_type}-ci.yml"
             for yf in yaml_files:
                 text = yf.read_text(errors="ignore")
                 if "MauroDruwel/quality-gate" in text or "MauroDruwel/ha-quality-gate" in text or is_mqg_itself:
                     uses_mqg = True
-                    break
+                if expected_action in text or is_mqg_itself or self.project_type == "generic":
+                    mqg_archetype_match = True
             self.check(uses_mqg, "Uses Mauro Quality Gate actions", "Canonical MQG provider" if is_mqg_itself else "Reusing centralized MQG workflows", critical=False, section=sec)
+            self.check(mqg_archetype_match, f"CI matches archetype ({self.project_type})", f"Uses {expected_action}" if mqg_archetype_match else f"Expected {expected_action} in workflows", critical=False, section=sec)
         else:
             self.check(False, "Active workflow pipelines", "None found", section=sec)
 
@@ -174,8 +195,19 @@ class ProjectAuditor:
         
         if self.project_type == "tauri":
             test_files = list(self.root.glob("src/**/*.test.ts")) + list(self.root.glob("src/**/*.test.tsx"))
-            has_tests = len(test_files) > 0 or (self.root / "tests").is_dir()
-            test_detail = f"Found {len(test_files)} frontend test file(s) + Cargo unit tests"
+            rust_tests = False
+            if (self.root / "src-tauri").is_dir():
+                for rs in (self.root / "src-tauri").rglob("*.rs"):
+                    if "#[test]" in rs.read_text(errors="ignore"):
+                        rust_tests = True
+                        break
+            has_tests = (len(test_files) > 0) or rust_tests
+            detail_parts = []
+            if test_files:
+                detail_parts.append(f"{len(test_files)} frontend test file(s)")
+            if rust_tests:
+                detail_parts.append("Rust unit test suite")
+            test_detail = " + ".join(detail_parts) if detail_parts else "None found"
         elif self.project_type == "typescript":
             test_files = list(self.root.glob("**/*.test.ts")) + list(self.root.glob("**/*.spec.ts"))
             has_tests = len(test_files) > 0 or (self.root / "tests").is_dir()

@@ -13,6 +13,11 @@ on:
         required: false
         default: "pnpm"
         type: string
+      pnpm-version:
+        description: "pnpm version to use"
+        required: false
+        default: "10"
+        type: string
 
 jobs:
   check-frontend:
@@ -24,9 +29,9 @@ jobs:
 
       - name: Setup pnpm
         if: inputs.package-manager == 'pnpm'
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: ${{ inputs.pnpm-version }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -61,9 +66,9 @@ jobs:
       - name: Unit Tests
         run: |
           if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
-            pnpm test -- --run
+            pnpm test --if-present
           else
-            npm test -- --run --if-present
+            npm test --if-present
           fi
 
   check-rust:
