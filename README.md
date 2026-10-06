@@ -45,6 +45,7 @@ All repositories inherit centralized, maintained pipelines via GitHub Actions `w
 | **Tauri Release** | `.github/workflows/tauri-release.yml` | Multi-platform matrix build (`macos-14` arm64, `windows-latest` x64, `ubuntu-22.04` x64), package signing, DMG/MSI/AppImage bundle generation, automated GitHub Release. |
 | **TypeScript CI** | `.github/workflows/typescript-ci.yml` | Matrix Node.js (20, 22), pnpm/npm caching, ESLint, TypeScript typecheck, Vitest/Jest execution, production build verification. |
 | **Python CI** | `.github/workflows/python-ci.yml` | Matrix Python (3.11, 3.12, 3.13), Ruff formatting and linting, and Pytest test execution. |
+| **Cloudflare Forge & OpenAPI CI** | `.github/workflows/forge-ci.yml` | OpenAPI 3.x schema validation, Cloudflare Forge SDK generation, zero-drift check (`git diff --exit-code`), and target SDK verification (Rust, Python, TypeScript). |
 
 ### How to Use in Your Repository
 
@@ -110,6 +111,25 @@ jobs:
     uses: MauroDruwel/quality-gate/.github/workflows/python-ci.yml@main
     with:
       python-version: '3.12'
+```
+
+#### Cloudflare Forge & OpenAPI Project
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  forge-ci:
+    uses: MauroDruwel/quality-gate/.github/workflows/forge-ci.yml@main
+    with:
+      spec-path: 'docs/openapi.yaml'
+      validate-spec: true
+      check-drift: true
 ```
 
 ---

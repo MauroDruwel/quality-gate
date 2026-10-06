@@ -1,0 +1,277 @@
+name: Cloudflare Forge & OpenAPI CI (Quality Gate)
+
+on:
+  workflow_call:
+    inputs:
+      spec-path:
+        description: "Path to OpenAPI specification (YAML or JSON)"
+        required: false
+        default: "docs/openapi.yaml"
+        type: string
+      node-version:
+        description: "Node.js version to use"
+        required: false
+        default: "22"
+        type: string
+      package-manager:
+        description: "Package manager: pnpm or npm"
+        required: false
+        default: "pnpm"
+        type: string
+      pnpm-version:
+        description: "pnpm version to use"
+        required: false
+        default: "10"
+        type: string
+      validate-spec:
+        description: "Validate OpenAPI schema structure and syntax"
+        required: false
+        default: true
+        type: boolean
+      check-drift:
+        description: "Enforce zero drift between OpenAPI spec and generated SDKs"
+        required: false
+        default: true
+        type: boolean
+      run-python-checks:
+        description: "Run Python lint and tests if Python client is present"
+        required: false
+        default: true
+        type: boolean
+      run-rust-checks:
+        description: "Run Rust cargo check and tests if Rust crate is present"
+        required: false
+        default: true
+        type: boolean
+      run-typescript-checks:
+        description: "Run TypeScript typecheck and tests if TypeScript client is present"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  validate-openapi:
+    name: OpenAPI 3.x Specification Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python for schema validation
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate OpenAPI Schema Syntax & Invariants
+        if: inputs.validate-spec
+        run: |
+          python -c '
+          import sys, os, json
+          try:
+              import yaml
+          except ImportError:
+              os.system("pip install pyyaml")
+              import yaml
+
+          candidates = [
+              "${{ inputs.spec-path }}",
+              "docs/openapi.yaml",
+              "docs/openapi.json",
+              "openapi.yaml",
+              "openapi.json",
+              "api/openapi.yaml",
+              "spec/openapi.yaml",
+          ]
+          spec_file = None
+          for c in candidates:
+              if c and os.path.exists(c):
+                  spec_file = c
+                  break
+
+          if not spec_file:
+              print(f"❌ Error: No OpenAPI specification found at ${{ inputs.spec-path }} or default locations.")
+              sys.exit(1)
+
+          print(f"🔍 Validating OpenAPI specification: {spec_file}")
+          with open(spec_file, "r", encoding="utf-8") as f:
+              if spec_file.endswith(".json"):
+                  data = json.load(f)
+              else:
+                  data = yaml.safe_load(f)
+
+          assert isinstance(data, dict), "Root of OpenAPI spec must be a dictionary/object"
+
+          openapi_version = data.get("openapi") or data.get("swagger")
+          if not openapi_version:
+              print("❌ Error: Missing openapi or swagger version key")
+              sys.exit(1)
+
+          print(f"  ✓ OpenAPI Version: {openapi_version}")
+          if not str(openapi_version).startswith("3."):
+              print(f"⚠️ Warning: Expected OpenAPI 3.x, found {openapi_version}")
+
+          info = data.get("info", {})
+          title = info.get("title", "Untitled")
+          version = info.get("version", "0.0.0")
+          print(f"  ✓ API Title: {title} (v{version})")
+
+          paths = data.get("paths", {})
+          print(f"  ✓ Endpoints registered: {len(paths)} paths")
+          if len(paths) == 0:
+              print("❌ Error: OpenAPI specification has 0 paths defined.")
+              sys.exit(1)
+
+          total_ops = 0
+          for path, methods in paths.items():
+              if isinstance(methods, dict):
+                  for m in ["get", "post", "put", "patch", "delete", "options", "head"]:
+                      if m in methods:
+                          total_ops += 1
+
+          print(f"  ✓ Total operations/methods: {total_ops}")
+          print("✅ OpenAPI specification passed structural validation!")
+          '
+
+  forge-build-and-drift:
+    name: Cloudflare Forge Build & Drift Check
+    runs-on: ubuntu-latest
+    needs: validate-openapi
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check if Forge configuration is present
+        id: check-forge
+        run: |
+          if [ -f "forge.config.ts" ] || [ -f "forge.config.js" ] || [ -f "cloudflare.config.ts" ] || grep -q "@cloudflare/forge" package.json 2>/dev/null; then
+            echo "has_forge=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_forge=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup pnpm
+        if: steps.check-forge.outputs.has_forge == 'true' && inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup Node.js
+        if: steps.check-forge.outputs.has_forge == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+
+      - name: Install dependencies
+        if: steps.check-forge.outputs.has_forge == 'true'
+        run: |
+          if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+            pnpm install --frozen-lockfile
+          else
+            npm ci
+          fi
+
+      - name: Run Forge Generation
+        if: steps.check-forge.outputs.has_forge == 'true'
+        run: |
+          if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+            pnpm run generate --if-present || npx @cloudflare/forge build
+          else
+            npm run generate --if-present || npx @cloudflare/forge build
+          fi
+
+      - name: Check SDK Drift
+        if: steps.check-forge.outputs.has_forge == 'true' && inputs.check-drift
+        run: |
+          if ! git diff --exit-code; then
+            echo "❌ Error: Uncommitted SDK drift detected! The generated SDK files differ from what is committed."
+            echo "👉 Run 'forge build' or 'pnpm run generate' locally and commit the updated SDK artifacts."
+            exit 1
+          fi
+          echo "✅ No drift detected between OpenAPI spec and generated SDKs."
+
+  verify-targets:
+    name: Verify Target SDKs
+    runs-on: ubuntu-latest
+    needs: validate-openapi
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Python Target Verification
+      - name: Check Python Client
+        if: inputs.run-python-checks
+        run: |
+          if [ -f "pyproject.toml" ] || [ -f "setup.py" ]; then
+            echo "has_python=true" >> $GITHUB_ENV
+          fi
+
+      - name: Setup Python
+        if: env.has_python == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Verify Python Target (Ruff & Pytest)
+        if: env.has_python == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest pytest-cov
+          if [ -f "requirements.txt" ]; then pip install -r requirements.txt; fi
+          if [ -f "pyproject.toml" ]; then pip install -e .; fi
+          ruff check .
+          if [ -d "tests" ]; then pytest; fi
+
+      # Rust Target Verification
+      - name: Check Rust Target
+        if: inputs.run-rust-checks
+        run: |
+          if [ -f "Cargo.toml" ]; then
+            echo "has_rust=true" >> $GITHUB_ENV
+          fi
+
+      - name: Install Rust stable
+        if: env.has_rust == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Verify Rust Target (Check & Test)
+        if: env.has_rust == 'true'
+        run: |
+          cargo check --all-targets
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      # TypeScript Target Verification
+      - name: Check TypeScript Target
+        if: inputs.run-typescript-checks
+        run: |
+          if [ -f "tsconfig.json" ]; then
+            echo "has_ts=true" >> $GITHUB_ENV
+          fi
+
+      - name: Setup pnpm for TypeScript
+        if: env.has_ts == 'true' && inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup Node for TypeScript
+        if: env.has_ts == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+
+      - name: Verify TypeScript Target
+        if: env.has_ts == 'true'
+        run: |
+          if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+            pnpm install --frozen-lockfile
+            pnpm tsc --noEmit
+          else
+            npm ci
+            npx tsc --noEmit
+          fi

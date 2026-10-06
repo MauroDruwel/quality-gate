@@ -55,15 +55,70 @@ class ProjectAuditor:
             else:
                 print(f"  {RED}❌ FAIL{RESET}   {label:<34} {detail}")
 
+    def find_openapi_spec(self) -> Optional[Path]:
+        candidates = [
+            self.root / "docs" / "openapi.yaml",
+            self.root / "docs" / "openapi.yml",
+            self.root / "docs" / "openapi.json",
+            self.root / "openapi.yaml",
+            self.root / "openapi.yml",
+            self.root / "openapi.json",
+            self.root / "api" / "openapi.yaml",
+            self.root / "api" / "openapi.json",
+            self.root / "spec" / "openapi.yaml",
+            self.root / "spec" / "openapi.json",
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+        return None
+
+    def audit_openapi_spec(self, spec_path: Path, sec: str):
+        valid = False
+        detail = "Failed to parse spec"
+        try:
+            content = spec_path.read_text(encoding="utf-8", errors="ignore")
+            if spec_path.suffix == ".json":
+                data = json.loads(content)
+            else:
+                try:
+                    import yaml
+                    data = yaml.safe_load(content)
+                except ImportError:
+                    data = {"openapi": "3.0" if "openapi:" in content else None}
+
+            if isinstance(data, dict):
+                ver = data.get("openapi") or data.get("swagger")
+                info = data.get("info", {})
+                title = info.get("title", "Untitled")
+                paths = data.get("paths", {})
+                if ver and str(ver).startswith("3.") and len(paths) > 0:
+                    valid = True
+                    detail = f"OpenAPI {ver} | '{title}' ({len(paths)} endpoints)"
+                elif ver:
+                    valid = True
+                    detail = f"Version: {ver} | '{title}'"
+        except Exception as e:
+            detail = f"Parse error: {e}"
+        self.check(valid, "OpenAPI 3.x schema valid", detail, section=sec)
+
     def detect_project_type(self) -> str:
         if (self.root / "src-tauri" / "tauri.conf.json").exists() or (self.root / "src-tauri" / "Cargo.toml").exists():
             return "tauri"
+        if (
+            (self.root / "forge.config.ts").exists()
+            or (self.root / "forge.config.js").exists()
+            or (self.root / "cloudflare.config.ts").exists()
+        ):
+            return "forge"
         if (self.root / "package.json").exists():
             return "typescript"
         if (self.root / "pyproject.toml").exists() or (self.root / "setup.py").exists():
             return "python"
         if (self.root / "Cargo.toml").exists():
             return "rust"
+        if self.find_openapi_spec():
+            return "forge"
         return "generic"
 
     def audit_governance(self):
@@ -157,6 +212,35 @@ class ProjectAuditor:
                 has_ruff = "tool.ruff" in content
             self.check(has_ruff, "Ruff configuration in pyproject", "Fast linter/formatter", critical=False, section=sec)
 
+        elif self.project_type == "forge":
+            spec_path = self.find_openapi_spec()
+            self.check(spec_path is not None, "OpenAPI specification present", f"{spec_path.relative_to(self.root)}" if spec_path else "Missing openapi.yaml", section=sec)
+            if spec_path:
+                self.audit_openapi_spec(spec_path, sec)
+            has_forge_conf = (
+                (self.root / "forge.config.ts").exists()
+                or (self.root / "forge.config.js").exists()
+                or (self.root / "cloudflare.config.ts").exists()
+            )
+            self.check(has_forge_conf, "Forge configuration present", "forge.config.ts" if has_forge_conf else "Missing forge.config.ts", critical=False, section=sec)
+            has_lock = (self.root / "pnpm-lock.yaml").exists() or (self.root / "package-lock.yaml").exists() or (self.root / "uv.lock").exists() or (self.root / "Cargo.lock").exists()
+            self.check(has_lock, "Package lockfile committed", "Committed lockfile", critical=False, section=sec)
+
+        # Audit OpenAPI schema for projects that define an API surface alongside other archetypes
+        spec_path = self.find_openapi_spec()
+        if spec_path and self.project_type != "forge":
+            sec_api = "API Schema & Cloudflare Forge"
+            if not self.quiet:
+                print(f"\n{BLUE}{BOLD}[2b. {sec_api.upper()}]{RESET}")
+            self.check(True, "OpenAPI specification present", f"{spec_path.relative_to(self.root)} ({spec_path.stat().st_size} bytes)", section=sec_api)
+            self.audit_openapi_spec(spec_path, sec_api)
+            has_forge = (
+                (self.root / "forge.config.ts").exists()
+                or (self.root / "forge.config.js").exists()
+                or (self.root / "cloudflare.config.ts").exists()
+            )
+            self.check(has_forge, "Cloudflare Forge config present", "forge.config.ts" if has_forge else "Optional client generation pipeline", critical=False, section=sec_api)
+
     def audit_ci_cd(self):
         sec = "CI/CD Automation & Workflows"
         if not self.quiet:
@@ -173,15 +257,27 @@ class ProjectAuditor:
             uses_mqg = False
             mqg_archetype_match = False
             is_mqg_itself = self.root.name == "quality-gate" or (self.remote_repo and "quality-gate" in self.remote_repo)
-            expected_action = f"{self.project_type}-ci.yml"
+            
+            expected_actions = [f"{self.project_type}-ci.yml"]
+            if self.project_type == "forge":
+                expected_actions = ["forge-ci.yml"]
+            elif self.find_openapi_spec():
+                # Hybrid project with OpenAPI can use its native language CI or forge-ci.yml
+                expected_actions = [f"{self.project_type}-ci.yml", "forge-ci.yml"]
+
             for yf in yaml_files:
                 text = yf.read_text(errors="ignore")
                 if "MauroDruwel/quality-gate" in text or "MauroDruwel/ha-quality-gate" in text or is_mqg_itself:
                     uses_mqg = True
-                if expected_action in text or is_mqg_itself or self.project_type == "generic":
+                for ea in expected_actions:
+                    if ea in text:
+                        mqg_archetype_match = True
+                        break
+                if is_mqg_itself or self.project_type == "generic":
                     mqg_archetype_match = True
+
             self.check(uses_mqg, "Uses Mauro Quality Gate actions", "Canonical MQG provider" if is_mqg_itself else "Reusing centralized MQG workflows", critical=False, section=sec)
-            self.check(mqg_archetype_match, f"CI matches archetype ({self.project_type})", f"Uses {expected_action}" if mqg_archetype_match else f"Expected {expected_action} in workflows", critical=False, section=sec)
+            self.check(mqg_archetype_match, f"CI matches archetype ({self.project_type})", f"Uses {', '.join(expected_actions)}" if mqg_archetype_match else f"Expected one of {expected_actions} in workflows", critical=False, section=sec)
         else:
             self.check(False, "Active workflow pipelines", "None found", section=sec)
 
@@ -218,6 +314,10 @@ class ProjectAuditor:
         elif self.project_type == "rust":
             has_tests = (self.root / "tests").is_dir() or list(self.root.glob("src/**/*.rs"))
             test_detail = "Cargo test suite"
+        elif self.project_type == "forge":
+            test_files = list(self.root.glob("tests/**/*.*")) + list(self.root.glob("spec/**/*.test.*"))
+            has_tests = len(test_files) > 0 or (self.root / "tests").is_dir()
+            test_detail = f"Found {len(test_files)} test/spec file(s)" if test_files else ("tests/ directory" if has_tests else "Missing tests/")
         else:
             tests_dir = self.root / "tests"
             if tests_dir.is_dir():

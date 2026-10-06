@@ -68,6 +68,23 @@ class TestProjectAuditor(unittest.TestCase):
             self.assertIn("results", data)
             self.assertEqual(data["project_type"], "generic")
 
+    def test_detect_forge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmppath = Path(tmp)
+            (tmppath / "forge.config.ts").write_text("export default {};")
+            (tmppath / "docs").mkdir()
+            (tmppath / "docs" / "openapi.yaml").write_text("openapi: 3.0.3\ninfo:\n  title: Test API\n  version: 1.0.0\npaths:\n  /test:\n    get:\n      responses:\n        '200':\n          description: OK")
+            auditor = ProjectAuditor(tmppath, quiet=True)
+            self.assertEqual(auditor.detect_project_type(), "forge")
+            spec = auditor.find_openapi_spec()
+            self.assertIsNotNone(spec)
+            auditor.audit_architecture_and_tooling()
+            # Spec validation should pass
+            spec_records = [r for r in auditor.results if "OpenAPI" in r["label"]]
+            self.assertTrue(len(spec_records) > 0)
+            self.assertTrue(all(r["passed"] for r in spec_records))
+
 
 if __name__ == "__main__":
     unittest.main()
+
