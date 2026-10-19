@@ -194,6 +194,23 @@ All Home Assistant integrations (`custom_components`) and client libraries must 
 3. **Catalog Submissions (`hacs/default`)**:
    - Ensure the `integration` catalog file remains strictly sorted alphabetically (`python scripts/is_sorted.py`).
 
+### G. Integration Archetypes & Lessons Learned (Mauro's Integration Portfolio)
+1. **Cloud REST + Auto-generated SDK (`Weathercloud-HA`)**:
+   - Best practice: Generate async client libraries from OpenAPI specs using Cloudflare Forge to guarantee zero schema drift.
+   - Use standard `DataUpdateCoordinator` with exponential backoff on HTTP 429/5xx errors.
+2. **Local LAN Device Scraping (`SolarlogLegacyHA`)**:
+   - Map unreachable local devices / timeouts to `UpdateFailed` so entities turn `unavailable` instead of crashing coordinator.
+   - Routinely bump `min_ha_version` in `hacs.json` to keep pace with Home Assistant minor releases.
+3. **Multi-device Cloud Portals (`SMA-ennexOS-cloud-HA`)**:
+   - Multi-device topology: split inverters, batteries, and meters into distinct HA devices via `DeviceInfo(identifiers={...})`.
+   - Never hardcode timezones (e.g. `"Europe/Brussels"`); always compute local day boundaries from `hass.config.time_zone`.
+4. **Interactive 2FA Limitations & Anti-Patterns (`HeyTelecomHA`)**:
+   - When an upstream API enforces interactive SMS/push 2FA with short (1h) token lifetimes and no persistent OAuth refresh token, background automation is infeasible.
+   - Clearly document authentication limitations and pause broken integrations rather than implementing fragile workarounds.
+5. **Real-time WebSockets & Streaming (`homewizard-cloud-ha`)**:
+   - Always accept an explicit `ssl.SSLContext` in the client library to prevent blocking `SSLContext.load_default_certs` in the asyncio event loop.
+   - Surface mid-stream authentication drops immediately via `entry.async_start_reauth(hass)` and break connection retry loops.
+
 ---
 
 ## 4. GitHub Metadata & Topic Conventions
