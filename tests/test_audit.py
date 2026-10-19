@@ -34,6 +34,13 @@ class TestProjectAuditor(unittest.TestCase):
             auditor = ProjectAuditor(tmppath, quiet=True)
             self.assertEqual(auditor.detect_project_type(), "python")
 
+    def test_detect_homeassistant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmppath = Path(tmp)
+            (tmppath / "hacs.json").write_text("{}")
+            auditor = ProjectAuditor(tmppath, quiet=True)
+            self.assertEqual(auditor.detect_project_type(), "homeassistant")
+
     def test_audit_governance_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmppath = Path(tmp)

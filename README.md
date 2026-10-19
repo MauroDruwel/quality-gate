@@ -11,17 +11,17 @@ The canonical software quality standards, architectural conventions, centralized
 
 ---
 
-## 🏛️ The 6 Pillars of Mauro Quality Gate
+## 🏛️ The 7 Pillars of Mauro Quality Gate
 
 ```
                   ┌─────────────────────────────────────────┐
                   │       Mauro Quality Gate (MQG)          │
                   └────────────────────┬────────────────────┘
-         ┌───────────────┬─────────────┼─────────────┬───────────────┐
-         ▼               ▼             ▼             ▼               ▼
-   [Governance]    [Architecture]   [CI/CD]    [Type Safety]     [Testing]
-   Clean OSS &     Tauri / Vite /  Central     Zero-warning      Automated
-   Attribution     Cargo / Modern  Workflows   Typechecks        Coverage
+         ┌───────────────┬─────────────┼─────────────┬───────────────┬───────────────┐
+         ▼               ▼             ▼             ▼               ▼               ▼
+   [Governance]    [Architecture]   [CI/CD]    [Type Safety]     [Testing]       [Home Assistant]
+   Clean OSS &     Tauri / Vite /  Central     Zero-warning      Automated       HACS & Core API
+   Attribution     Cargo / Modern  Workflows   Typechecks        Coverage        Frenck Checklist
 ```
 
 | Pillar | Focus | Requirements |
@@ -32,6 +32,7 @@ The canonical software quality standards, architectural conventions, centralized
 | **4. Type Safety & Strictness** | Zero-warning philosophy | Strict TypeScript (`tsc --noEmit`), Rust `cargo clippy -- -D warnings`, Python Ruff formatting & linting. |
 | **5. Testing & Verification** | Regression prevention | Automated unit & integration test suites, fast feedback, automated runs in CI. |
 | **6. Security & Releases** | Supply chain & delivery | Private vulnerability reporting policy, semantic versioning (`v*`), multi-platform binary compilation. |
+| **7. Home Assistant & HACS** | Core integration quality | Reauthentication flows (`async_step_reauth`), event loop SSL safety (`get_default_context()`), `ConfigEntryAuthFailed`/`ConfigEntryNotReady`, Coordinator auth handling, timezone awareness, recent `min_ha_version` in `hacs.json`, `hacs/action` and `hassfest`. |
 
 ---
 

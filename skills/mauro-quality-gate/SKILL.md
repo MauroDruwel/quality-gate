@@ -5,14 +5,14 @@ description: Standards, architecture, reusable CI/CD workflows, and testing conv
 
 # Mauro Quality Gate (MQG)
 
-This skill governs the standards, architecture, testing, and CI/CD pipelines for all non-Home Assistant software repositories (desktop applications, full-stack web, libraries, CLIs, OpenAPI & Forge SDK generators) maintained by **Mauro Druwel** (@MauroDruwel).
+This skill governs the standards, architecture, testing, and CI/CD pipelines for all software repositories (desktop applications, full-stack web, libraries, CLIs, OpenAPI & Forge SDK generators, and Home Assistant / HACS integrations) maintained by **Mauro Druwel** (@MauroDruwel).
 
 Authoritative central repository, reusable GitHub workflows, templates, and auditing CLI:
 👉 **`https://github.com/MauroDruwel/quality-gate`**
 
 ---
 
-## 1. The 6 Pillars of Mauro Quality Gate
+## 1. The 7 Pillars of Mauro Quality Gate
 
 | Pillar | Focus | Requirements |
 |---|---|---|
@@ -22,6 +22,7 @@ Authoritative central repository, reusable GitHub workflows, templates, and audi
 | **4. Type Safety & Strictness** | Zero-warning philosophy | Strict TypeScript (`noImplicitAny`), Rust `clippy -D warnings`, Python Ruff |
 | **5. Testing & Verification** | Regression prevention | Unit + integration tests, high coverage of core business logic, automated CI runs |
 | **6. Security & Releases** | Supply chain & distribution | Dependabot/lockfile checks, semantic version tags (`vX.Y.Z`), automated binary releases |
+| **7. Home Assistant & HACS** | Core integration quality | Reauth flows, async event loop safety (SSL contexts), ConfigEntryAuthFailed/NotReady, Coordinator auth handling, timezone awareness, recent `min_ha_version`, hassfest + HACS CI actions |
 
 ---
 
@@ -144,7 +145,58 @@ jobs:
 
 ---
 
-## 3. GitHub Metadata & Topic Conventions
+## 3. Home Assistant & HACS Integration Standard (The "Frenck Checklist")
+
+All Home Assistant integrations (`custom_components`) and client libraries must adhere to the core architectural requirements enforced during HACS default store reviews:
+
+### A. Event Loop & Async Safety
+1. **Never block the event loop**: Client libraries and integrations running inside Home Assistant must never execute blocking I/O (synchronous `requests`, disk reads, synchronous certificate loading) directly on the asyncio loop.
+2. **Explicit SSL Context for WebSockets (`wss://`)**:
+   - `websockets.connect(url)` on `wss://` without an `ssl=` parameter causes `asyncio` to create a default SSL context on every connect/reconnect, calling `SSLContext.load_default_certs()` synchronously from disk on the event loop (flagged by HA as a blocking call).
+   - **Requirement**: Client libraries must accept `ssl: ssl.SSLContext | None = None` in their client constructor/connect methods. In the integration, pass `homeassistant.util.ssl.get_default_context()`.
+
+### B. Startup & Error Handling (`async_setup_entry`)
+1. **Never leak raw library exceptions**: All library exceptions during entry setup must be caught and translated.
+2. **`ConfigEntryAuthFailed`**: If credentials/tokens are rejected on startup, catch `AuthenticationError` and raise `ConfigEntryAuthFailed(err)`. This triggers HA's reauthentication banner instead of failing silently or logging infinite retries.
+3. **`ConfigEntryNotReady`**: If the cloud API or device is unreachable (timeouts, 502/503/504, connection refused), catch connection errors and raise `ConfigEntryNotReady(err)`. Home Assistant will automatically handle exponential backoff and retry loading.
+
+### C. Mandatory Reauthentication Flow (`config_flow.py`)
+1. Every integration storing credentials (username, password, API tokens) must implement:
+   - `async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult`
+   - `async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult`
+2. On successful reauthentication, call:
+   ```python
+   return self.async_update_reload_and_abort(existing_entry, data={**existing_entry.data, **user_input})
+   ```
+3. Strings and translations (`strings.json` and `translations/*.json`) must include:
+   - `config.step.reauth_confirm` (title, description, and data fields)
+   - `config.abort.reauth_successful`
+
+### D. DataUpdateCoordinator & Streaming State
+1. **Polled Updates**: In `_async_update_data()`:
+   - Catch `AuthenticationError` and raise `ConfigEntryAuthFailed(err)`.
+   - Catch network errors and raise `UpdateFailed(err)`.
+2. **WebSocket / Long-lived Streams**:
+   - When a token renewal or authentication check fails mid-stream, do **not** catch `Exception` and loop forever with `sleep(5)`.
+   - Surface the authentication failure or call `self.entry.async_start_reauth(self.hass)` immediately.
+
+### E. Timezone Awareness
+- Never hardcode timezones (e.g. `"Europe/Brussels"`) or assume fixed UTC day boundaries in energy calculations.
+- Pass `hass.config.time_zone` to client libraries, and calculate day/month boundaries using `homeassistant.util.dt.now(time_zone)`.
+
+### F. HACS Repository & Publishing Quality
+1. **`hacs.json`**:
+   - `name`: Human-readable component name.
+   - `min_ha_version`: Must be recent (at most 6 months old, currently `>= 2024.11.0`).
+2. **Mandatory CI Workflows**:
+   - `.github/workflows/hacs.yml`: `hacs/action` with zero disabled checks.
+   - `.github/workflows/hassfest.yml`: `home-assistant/actions/hassfest`.
+3. **Catalog Submissions (`hacs/default`)**:
+   - Ensure the `integration` catalog file remains strictly sorted alphabetically (`python scripts/is_sorted.py`).
+
+---
+
+## 4. GitHub Metadata & Topic Conventions
 
 Do not overload repositories with dozens of tags. Follow focused tagging:
 

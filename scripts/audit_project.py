@@ -103,6 +103,8 @@ class ProjectAuditor:
         self.check(valid, "OpenAPI 3.x schema valid", detail, section=sec)
 
     def detect_project_type(self) -> str:
+        if (self.root / "hacs.json").exists() or (self.root / "custom_components").is_dir():
+            return "homeassistant"
         if (self.root / "src-tauri" / "tauri.conf.json").exists() or (self.root / "src-tauri" / "Cargo.toml").exists():
             return "tauri"
         if (
@@ -226,6 +228,72 @@ class ProjectAuditor:
             has_lock = (self.root / "pnpm-lock.yaml").exists() or (self.root / "package-lock.yaml").exists() or (self.root / "uv.lock").exists() or (self.root / "Cargo.lock").exists()
             self.check(has_lock, "Package lockfile committed", "Committed lockfile", critical=False, section=sec)
 
+        elif self.project_type == "homeassistant":
+            # 1. hacs.json check
+            hacs_file = self.root / "hacs.json"
+            hacs_ok = False
+            hacs_detail = "Missing hacs.json"
+            if hacs_file.exists():
+                try:
+                    hdata = json.loads(hacs_file.read_text(encoding="utf-8"))
+                    min_ver = hdata.get("min_ha_version")
+                    if min_ver:
+                        hacs_ok = True
+                        hacs_detail = f"min_ha_version: {min_ver}"
+                    else:
+                        hacs_ok = True
+                        hacs_detail = "Present (no min_ha_version specified)"
+                except Exception as e:
+                    hacs_detail = f"Malformed hacs.json: {e}"
+            self.check(hacs_ok, "hacs.json configuration valid", hacs_detail, section=sec)
+
+            # 2. custom_components directory & manifest.json
+            cc_dir = self.root / "custom_components"
+            has_cc = cc_dir.is_dir()
+            self.check(has_cc, "custom_components/ directory present", "HA component structure", section=sec)
+
+            manifests = list(cc_dir.glob("*/manifest.json")) if has_cc else []
+            has_manifest = len(manifests) > 0
+            manifest_detail = f"Found {len(manifests)} integration(s)" if has_manifest else "Missing manifest.json"
+            domain = None
+            if has_manifest:
+                try:
+                    mdata = json.loads(manifests[0].read_text(encoding="utf-8"))
+                    domain = mdata.get("domain")
+                    ver = mdata.get("version")
+                    manifest_detail = f"Domain: '{domain}', version: '{ver}'"
+                except Exception as e:
+                    manifest_detail = f"Malformed manifest.json: {e}"
+            self.check(has_manifest, "manifest.json present and valid", manifest_detail, section=sec)
+
+            # 3. Reauth flow in config_flow.py (Frenck requirement)
+            has_reauth = False
+            reauth_detail = "No config_flow.py found"
+            config_flows = list(cc_dir.glob("*/config_flow.py")) if has_cc else []
+            if config_flows:
+                cf_code = config_flows[0].read_text(encoding="utf-8", errors="ignore")
+                if "async_step_reauth" in cf_code:
+                    has_reauth = True
+                    reauth_detail = "async_step_reauth implemented"
+                else:
+                    reauth_detail = "Missing async_step_reauth (HACS / Frenck requirement)"
+            self.check(has_reauth, "Reauthentication flow implemented", reauth_detail, critical=False, section=sec)
+
+            # 4. Translations / strings.json check
+            strings_files = list(cc_dir.glob("*/strings.json")) if has_cc else []
+            has_strings = len(strings_files) > 0
+            self.check(has_strings, "strings.json present", "Translations base" if has_strings else "Missing strings.json", critical=False, section=sec)
+
+            # 5. Event Loop & Blocking SSL Safety (Frenck review requirement)
+            blocking_ssl = False
+            if has_cc:
+                for py_file in cc_dir.rglob("*.py"):
+                    code = py_file.read_text(encoding="utf-8", errors="ignore")
+                    if "websockets.connect(" in code and "ssl=" not in code and "wss://" in code:
+                        blocking_ssl = True
+                        break
+            self.check(not blocking_ssl, "Event loop SSL safety", "No unconfigured websockets SSL contexts" if not blocking_ssl else "Warning: websockets.connect without ssl= blocks event loop", critical=False, section=sec)
+
         # Audit OpenAPI schema for projects that define an API surface alongside other archetypes
         spec_path = self.find_openapi_spec()
         if spec_path and self.project_type != "forge":
@@ -278,6 +346,12 @@ class ProjectAuditor:
 
             self.check(uses_mqg, "Uses Mauro Quality Gate actions", "Canonical MQG provider" if is_mqg_itself else "Reusing centralized MQG workflows", critical=False, section=sec)
             self.check(mqg_archetype_match, f"CI matches archetype ({self.project_type})", f"Uses {', '.join(expected_actions)}" if mqg_archetype_match else f"Expected one of {expected_actions} in workflows", critical=False, section=sec)
+
+            if self.project_type == "homeassistant":
+                has_hacs_action = any("hacs/action" in yf.read_text(errors="ignore") for yf in yaml_files)
+                has_hassfest = any("hassfest" in yf.read_text(errors="ignore") for yf in yaml_files)
+                self.check(has_hacs_action, "HACS action workflow (hacs/action)", "Required for HACS default", section=sec)
+                self.check(has_hassfest, "Hassfest action workflow", "Required for Home Assistant", section=sec)
         else:
             self.check(False, "Active workflow pipelines", "None found", section=sec)
 
@@ -318,6 +392,10 @@ class ProjectAuditor:
             test_files = list(self.root.glob("tests/**/*.*")) + list(self.root.glob("spec/**/*.test.*"))
             has_tests = len(test_files) > 0 or (self.root / "tests").is_dir()
             test_detail = f"Found {len(test_files)} test/spec file(s)" if test_files else ("tests/ directory" if has_tests else "Missing tests/")
+        elif self.project_type == "homeassistant":
+            test_files = list(self.root.glob("tests/**/*.py"))
+            has_tests = len(test_files) > 0
+            test_detail = f"Found {len(test_files)} test file(s) in tests/" if has_tests else "Missing tests/"
         else:
             tests_dir = self.root / "tests"
             if tests_dir.is_dir():
