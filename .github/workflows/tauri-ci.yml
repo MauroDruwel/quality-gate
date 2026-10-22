@@ -66,7 +66,7 @@ jobs:
       - name: Unit Tests
         run: |
           if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
-            pnpm test --if-present
+            pnpm run --if-present test
           else
             npm test --if-present
           fi
