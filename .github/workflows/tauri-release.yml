@@ -58,6 +58,7 @@ jobs:
           cache: ${{ inputs.package-manager }}
 
       - name: Install dependencies (Frontend)
+        shell: bash
         run: |
           if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
             pnpm install --frozen-lockfile
