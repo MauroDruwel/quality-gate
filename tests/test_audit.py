@@ -11,6 +11,19 @@ from scripts.audit_project import ProjectAuditor
 
 
 class TestProjectAuditor(unittest.TestCase):
+    def test_go_modules_with_internal_tests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text("module example.test")
+            (root / "go.sum").touch()
+            (root / "internal").mkdir()
+            (root / "internal" / "example_test.go").touch()
+            auditor = ProjectAuditor(root, quiet=True)
+            self.assertEqual(auditor.project_type, "go")
+            auditor.audit_architecture_and_tooling()
+            auditor.audit_tests()
+            self.assertTrue(all(result["passed"] for result in auditor.results))
+
     def test_detect_tauri(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmppath = Path(tmp)

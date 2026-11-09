@@ -119,6 +119,8 @@ class ProjectAuditor:
             return "python"
         if (self.root / "Cargo.toml").exists():
             return "rust"
+        if (self.root / "go.mod").exists():
+            return "go"
         if self.find_openapi_spec():
             return "forge"
         return "generic"
@@ -166,7 +168,9 @@ class ProjectAuditor:
         if not self.quiet:
             print(f"\n{BLUE}{BOLD}[2. {sec.upper()}]{RESET}")
 
-        if self.project_type == "tauri":
+        if self.project_type == "go":
+            self.check((self.root / "go.sum").is_file(), "Go checksums committed", "go.sum", section=sec)
+        elif self.project_type == "tauri":
             self.check((self.root / "src-tauri").is_dir(), "src-tauri directory present", "Tauri backend", section=sec)
             self.check((self.root / "src-tauri" / "Cargo.toml").exists(), "Rust Cargo.toml present", "Dependencies", section=sec)
             self.check((self.root / "package.json").exists(), "package.json present", "Frontend app", section=sec)
@@ -388,6 +392,10 @@ class ProjectAuditor:
         elif self.project_type == "rust":
             has_tests = (self.root / "tests").is_dir() or list(self.root.glob("src/**/*.rs"))
             test_detail = "Cargo test suite"
+        elif self.project_type == "go":
+            test_files = list(self.root.rglob("*_test.go"))
+            has_tests = bool(test_files)
+            test_detail = f"Found {len(test_files)} Go test file(s)"
         elif self.project_type == "forge":
             test_files = list(self.root.glob("tests/**/*.*")) + list(self.root.glob("spec/**/*.test.*"))
             has_tests = len(test_files) > 0 or (self.root / "tests").is_dir()
