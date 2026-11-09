@@ -42,7 +42,7 @@ All repositories inherit centralized, maintained pipelines via GitHub Actions `w
 
 | Workflow | File | Capabilities |
 |---|---|---|
-| **Tauri CI** | `.github/workflows/tauri-ci.yml` | Node & Rust setup, pnpm cache, ESLint, TypeScript typecheck, frontend tests, Cargo clippy, Cargo test, release dry-run. |
+| **Tauri CI** | `.github/workflows/tauri-ci.yml` | Frontend lint, typecheck, tests and build, optional Playwright Chromium tests, plus Rust formatting, Clippy and tests. |
 | **Tauri Release** | `.github/workflows/tauri-release.yml` | Multi-platform matrix build (`macos-14` arm64, `windows-latest` x64, `ubuntu-22.04` x64), package signing, DMG/MSI/AppImage bundle generation, automated GitHub Release. |
 | **TypeScript CI** | `.github/workflows/typescript-ci.yml` | Matrix Node.js (20, 22), pnpm/npm caching, ESLint, TypeScript typecheck, Vitest/Jest execution, production build verification. |
 | **Python CI** | `.github/workflows/python-ci.yml` | Matrix Python (3.11, 3.12, 3.13), Ruff formatting and linting, and Pytest test execution. |
@@ -53,6 +53,9 @@ All repositories inherit centralized, maintained pipelines via GitHub Actions `w
 Add a minimal caller workflow in `.github/workflows/ci.yml`:
 
 #### Tauri Desktop Application
+
+Use the [desktop update check standard](templates/tauri/updates.md) for apps
+that publish GitHub releases.
 ```yaml
 name: CI
 
@@ -73,10 +76,15 @@ jobs:
     with:
       node-version: '22'
       package-manager: 'pnpm'
-      run-cargo-test: true
-      run-frontend-test: true
-      strict: true
+      run-playwright: false
 ```
+
+Set `run-playwright: true` when the caller commits Playwright to its dev
+dependencies and lockfile and defines a `test:e2e` script. MQG installs Chromium
+and its Linux dependencies and fails CI if the script is missing or fails.
+Configure the browser test server in the caller's Playwright config. For
+browser-only Tauri tests, mock IPC in the caller rather than requiring a native
+app or live credentials in CI.
 
 #### TypeScript / Web Project
 ```yaml
