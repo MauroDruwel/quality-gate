@@ -1,0 +1,470 @@
+name: Docs Coverage & Sync Check (Quality Gate)
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "Behavior: 'pr' (edit docs & open/update PR) or 'report' (comment on PR or open/update issue)"
+        required: false
+        default: "pr"
+        type: string
+      docs-paths:
+        description: "Comma-separated documentation files/directories to inspect and maintain"
+        required: false
+        default: "README.md,docs"
+        type: string
+      source-paths:
+        description: "Comma-separated source directories/files to scan (empty = auto-detect)"
+        required: false
+        default: ""
+        type: string
+      base-branch:
+        description: "Base branch for PRs and diff comparison (empty = repository default branch)"
+        required: false
+        default: ""
+        type: string
+      branch-name:
+        description: "Branch name used when mode is 'pr'"
+        required: false
+        default: "chore/sync-docs"
+        type: string
+      model-endpoint:
+        description: "HTTP endpoint returning the default AI model identifier"
+        required: false
+        default: "https://maurodruwel.be/ai/default"
+        type: string
+      model:
+        description: "Explicit AI model override (skips model-endpoint when non-empty)"
+        required: false
+        default: ""
+        type: string
+      use-github-token:
+        description: "Use workflow GITHUB_TOKEN directly instead of OpenCode GitHub App OIDC exchange"
+        required: false
+        default: true
+        type: boolean
+      fail-on-gaps:
+        description: "Fail the job when documentation gaps or stale entries are detected"
+        required: false
+        default: false
+        type: boolean
+      extra-instructions:
+        description: "Optional repository-specific guidance appended to the agent prompt"
+        required: false
+        default: ""
+        type: string
+      share:
+        description: "Share the OpenCode session link"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  docs-check:
+    name: Documentation Coverage & Sync
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 20
+
+      - name: Validate inputs and resolve AI model
+        id: config
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_BASE: ${{ inputs.base-branch }}
+          INPUT_BRANCH: ${{ inputs.branch-name }}
+          INPUT_MODEL: ${{ inputs.model }}
+          INPUT_ENDPOINT: ${{ inputs.model-endpoint }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$INPUT_MODE" != "pr" ] && [ "$INPUT_MODE" != "report" ]; then
+            echo "::error::Invalid mode '$INPUT_MODE'. Expected 'pr' or 'report'."
+            exit 1
+          fi
+
+          BASE="${INPUT_BASE:-${DEFAULT_BRANCH:-main}}"
+          if ! printf '%s' "$BASE" | grep -Eq '^[A-Za-z0-9._/-]+$'; then
+            echo "::error::Invalid base branch name '$BASE'."
+            exit 1
+          fi
+          echo "base_branch=$BASE" >> "$GITHUB_OUTPUT"
+
+          if ! printf '%s' "$INPUT_BRANCH" | grep -Eq '^[A-Za-z0-9._/-]+$'; then
+            echo "::error::Invalid branch name '$INPUT_BRANCH'."
+            exit 1
+          fi
+          echo "branch_name=$INPUT_BRANCH" >> "$GITHUB_OUTPUT"
+
+          if [ -n "$INPUT_MODEL" ]; then
+            MODEL="$INPUT_MODEL"
+          else
+            MODEL=$(curl -sf "$INPUT_ENDPOINT")
+          fi
+
+          if [ -z "$MODEL" ]; then
+            echo "::error::AI model endpoint returned an empty response."
+            exit 1
+          fi
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+
+      - name: Build docs inventory
+        env:
+          DOCS_PATHS: ${{ inputs.docs-paths }}
+          SOURCE_PATHS: ${{ inputs.source-paths }}
+          BASE_BRANCH: ${{ steps.config.outputs.base_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python3 - <<'PYEOF'
+          import ast
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          try:
+              import tomllib
+          except ImportError:
+              tomllib = None  # type: ignore[assignment]
+
+          ROOT = Path(".").resolve()
+          SKIP_DIRS = {
+              ".git",
+              "node_modules",
+              ".next",
+              "out",
+              "dist",
+              "build",
+              "target",
+              ".venv",
+              "venv",
+              "__pycache__",
+              ".pytest_cache",
+              ".mypy_cache",
+          }
+          DOC_EXTENSIONS = {".md", ".mdx", ".rst", ".txt"}
+          ENV_PATTERNS = [
+              re.compile(r'os\.environ\.get\(\s*["\']([A-Z0-9_]+)["\']'),
+              re.compile(r'os\.getenv\(\s*["\']([A-Z0-9_]+)["\']'),
+              re.compile(r'os\.environ\[\s*["\']([A-Z0-9_]+)["\']\s*\]'),
+              re.compile(r'process\.env\.([A-Z][A-Z0-9_]+)'),
+              re.compile(r'(?:std::)?env::var(?:_os)?\(\s*["\']([A-Z][A-Z0-9_]+)["\']'),
+              re.compile(r'os\.(?:Getenv|LookupEnv)\(\s*["\']([A-Z][A-Z0-9_]+)["\']'),
+          ]
+
+          def run_cmd(cmd: list[str]) -> str:
+              res = subprocess.run(cmd, capture_output=True, text=True)
+              return res.stdout.strip() if res.returncode == 0 else ""
+
+          def walk_files(bases: list[Path]) -> list[Path]:
+              found: list[Path] = []
+              for base in bases:
+                  if not base.exists():
+                      continue
+                  if base.is_file():
+                      found.append(base)
+                      continue
+                  for root, dirs, files in os.walk(base):
+                      dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
+                      for name in sorted(files):
+                          found.append(Path(root) / name)
+              return found
+
+          docs_raw = [p.strip() for p in os.environ.get("DOCS_PATHS", "README.md,docs").split(",") if p.strip()]
+          source_raw = [p.strip() for p in os.environ.get("SOURCE_PATHS", "").split(",") if p.strip()]
+
+          doc_candidates = walk_files([ROOT / p for p in docs_raw])
+          doc_files = [
+              p for p in doc_candidates
+              if p.suffix.lower() in DOC_EXTENSIONS or p.name in {"_meta.json", "CHANGELOG.md", "README.md"}
+          ]
+          seen_docs: set[Path] = set()
+          unique_docs: list[Path] = []
+          for p in doc_files:
+              rp = p.resolve()
+              if rp not in seen_docs:
+                  seen_docs.add(rp)
+                  unique_docs.append(p)
+
+          if source_raw:
+              src_bases = [ROOT / p for p in source_raw]
+          else:
+              src_bases = [ROOT]
+          src_candidates = walk_files(src_bases)
+
+          py_files = [
+              p for p in src_candidates
+              if p.suffix == ".py"
+              and "tests" not in p.relative_to(ROOT).parts
+              and (bool(source_raw) or "docs" not in p.relative_to(ROOT).parts)
+              and not p.name.startswith("test_")
+          ]
+          ts_files = [
+              p for p in src_candidates
+              if p.suffix in {".ts", ".tsx", ".js", ".mjs"}
+              and "tests" not in p.relative_to(ROOT).parts
+              and (bool(source_raw) or "docs" not in p.relative_to(ROOT).parts)
+              and not p.name.endswith((".test.ts", ".test.tsx", ".spec.ts", ".config.js", ".config.ts", ".d.ts"))
+          ]
+          rs_files = [p for p in src_candidates if p.suffix == ".rs"]
+          go_files = [p for p in src_candidates if p.suffix == ".go" and not p.name.endswith("_test.go")]
+
+          env_vars: set[str] = set()
+          for p in py_files + ts_files + rs_files + go_files:
+              text = p.read_text(encoding="utf-8", errors="ignore")
+              for pat in ENV_PATTERNS:
+                  env_vars.update(pat.findall(text))
+
+          py_exports: dict[str, list[str]] = {}
+          py_symbols: dict[str, list[str]] = {}
+          for p in py_files:
+              rel = str(p.relative_to(ROOT))
+              text = p.read_text(encoding="utf-8", errors="ignore")
+              try:
+                  tree = ast.parse(text)
+              except SyntaxError:
+                  continue
+              syms: list[str] = []
+              for node in tree.body:
+                  if isinstance(node, ast.Assign):
+                      for tgt in node.targets:
+                          if isinstance(tgt, ast.Name) and tgt.id == "__all__" and isinstance(node.value, (ast.List, ast.Tuple)):
+                              items = [
+                                  elt.value for elt in node.value.elts
+                                  if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                              ]
+                              if items:
+                                  py_exports[rel] = items
+                  elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                      if not node.name.startswith("_"):
+                          args = [a.arg for a in node.args.args if a.arg != "self"]
+                          syms.append(f"def {node.name}({', '.join(args)})")
+                  elif isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
+                      methods = []
+                      for item in node.body:
+                          if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                              item.name == "__init__" or not item.name.startswith("_")
+                          ):
+                              margs = [a.arg for a in item.args.args if a.arg != "self"]
+                              methods.append(f"{item.name}({', '.join(margs)})")
+                      syms.append(f"class {node.name}: [{', '.join(methods[:10])}]")
+              if syms:
+                  py_symbols[rel] = syms
+
+          ts_exports: dict[str, list[str]] = {}
+          ts_export_re = re.compile(r'^\s*export\s+(?:async\s+)?(?:function|class|const|type|interface|enum)\s+([A-Za-z0-9_]+)', re.MULTILINE)
+          for p in ts_files:
+              text = p.read_text(encoding="utf-8", errors="ignore")
+              found = ts_export_re.findall(text)
+              if found:
+                  ts_exports[str(p.relative_to(ROOT))] = found[:25]
+
+          rs_exports: dict[str, list[str]] = {}
+          rs_pub_re = re.compile(r'^\s*pub\s+(?:async\s+)?(?:fn|struct|enum|trait)\s+([A-Za-z0-9_]+)', re.MULTILINE)
+          for p in rs_files:
+              text = p.read_text(encoding="utf-8", errors="ignore")
+              found = rs_pub_re.findall(text)
+              if found:
+                  rs_exports[str(p.relative_to(ROOT))] = found[:25]
+
+          go_exports: dict[str, list[str]] = {}
+          go_pub_re = re.compile(r'^(?:func\s+(?:\([^)]+\)\s+)?|type\s+)([A-Z][A-Za-z0-9_]*)', re.MULTILINE)
+          for p in go_files:
+              text = p.read_text(encoding="utf-8", errors="ignore")
+              found = go_pub_re.findall(text)
+              if found:
+                  go_exports[str(p.relative_to(ROOT))] = found[:25]
+
+          config_notes: list[str] = []
+          pyproject = ROOT / "pyproject.toml"
+          if pyproject.exists() and tomllib is not None:
+              try:
+                  pdata = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+                  proj = pdata.get("project", {})
+                  if proj:
+                      config_notes.append(
+                          f"- `pyproject.toml`: name={proj.get('name')}, version={proj.get('version')}, "
+                          f"requires-python={proj.get('requires-python')}, "
+                          f"dependencies={proj.get('dependencies', [])}"
+                      )
+              except Exception:
+                  pass
+
+          pkg_json = ROOT / "package.json"
+          if pkg_json.exists():
+              try:
+                  jdata = json.loads(pkg_json.read_text(encoding="utf-8"))
+                  config_notes.append(
+                      f"- `package.json`: name={jdata.get('name')}, version={jdata.get('version')}, "
+                      f"engines={jdata.get('engines')}, scripts={list((jdata.get('scripts') or {}).keys())}"
+                  )
+              except Exception:
+                  pass
+
+          cargo_toml = ROOT / "Cargo.toml"
+          if cargo_toml.exists() and tomllib is not None:
+              try:
+                  cdata = tomllib.loads(cargo_toml.read_text(encoding="utf-8"))
+                  cpkg = cdata.get("package", {})
+                  if cpkg:
+                      config_notes.append(
+                          f"- `Cargo.toml`: name={cpkg.get('name')}, version={cpkg.get('version')}, "
+                          f"rust-version={cpkg.get('rust-version')}"
+                      )
+              except Exception:
+                  pass
+
+          go_mod = ROOT / "go.mod"
+          if go_mod.exists():
+              lines = go_mod.read_text(encoding="utf-8", errors="ignore").splitlines()[:10]
+              config_notes.append("- `go.mod`: " + " | ".join(l.strip() for l in lines if l.strip()))
+
+          hacs_json = ROOT / "hacs.json"
+          if hacs_json.exists():
+              config_notes.append(f"- `hacs.json`: {hacs_json.read_text(encoding='utf-8', errors='ignore').strip()}")
+
+          base_branch = os.environ.get("BASE_BRANCH", "main")
+          event_name = os.environ.get("EVENT_NAME", "")
+          git_log = run_cmd(["git", "log", "-n", "10", "--oneline"])
+          if event_name == "pull_request":
+              run_cmd(["git", "fetch", "origin", base_branch, "--depth=20"])
+              git_diff = run_cmd(["git", "diff", "--stat", f"origin/{base_branch}...HEAD"])
+          else:
+              git_diff = run_cmd(["git", "diff", "--stat", "HEAD~1..HEAD"])
+
+          out: list[str] = [
+              "# Documentation Inventory",
+              "",
+              f"- Event: `{event_name}` | Base branch: `{base_branch}`",
+              f"- Docs paths checked: `{', '.join(docs_raw)}`",
+              "",
+              "## Recent Commits",
+              "```",
+              git_log or "(unavailable)",
+              "```",
+              "",
+              "## Latest Diff Summary",
+              "```",
+              git_diff or "(no single-commit diff available)",
+              "```",
+              "",
+              "## Documentation Files",
+          ]
+          if unique_docs:
+              for p in unique_docs:
+                  out.append(f"- `{p.relative_to(ROOT)}` ({p.stat().st_size} bytes)")
+          else:
+              out.append("- (none found)")
+
+          out.extend(["", "## Project Metadata & Runtime Constraints"])
+          out.extend(config_notes or ["- (none detected)"])
+
+          out.extend(["", "## Environment Variables Referenced in Code"])
+          out.extend([f"- `{v}`" for v in sorted(env_vars)] or ["- (none detected)"])
+
+          if py_exports:
+              out.extend(["", "## Python `__all__` Exports"])
+              for path, items in sorted(py_exports.items()):
+                  out.append(f"- `{path}`: {', '.join(f'`{i}`' for i in items)}")
+
+          if py_symbols:
+              out.extend(["", "## Python Public Symbols"])
+              for path, syms in sorted(py_symbols.items()):
+                  out.append(f"- `{path}`:")
+                  for s in syms[:25]:
+                      out.append(f"  - `{s}`")
+
+          for heading, mapping in [
+              ("TypeScript/JS Exports", ts_exports),
+              ("Rust Public Items", rs_exports),
+              ("Go Exported Items", go_exports),
+          ]:
+              if mapping:
+                  out.extend(["", f"## {heading}"])
+                  for path, items in sorted(mapping.items()):
+                      out.append(f"- `{path}`: {', '.join(f'`{i}`' for i in items)}")
+
+          Path("/tmp/docs-inventory.md").write_text("\n".join(out) + "\n", encoding="utf-8")
+          print("Wrote /tmp/docs-inventory.md")
+          PYEOF
+
+      - name: Run OpenCode docs check agent
+        uses: anomalyco/opencode/github@latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: ${{ steps.config.outputs.model }}
+          use_github_token: ${{ inputs.use-github-token }}
+          share: ${{ inputs.share }}
+          prompt: |
+            You are the Mauro Quality Gate documentation coverage and drift agent.
+
+            1. Read `/tmp/docs-inventory.md` first to inspect the project's public API surface, runtime/dependency constraints, environment variables, recent git changes, and existing documentation files.
+
+            2. Read the documentation files under `${{ inputs.docs-paths }}` and inspect the relevant source/config files to audit factual coverage and accuracy:
+               - Check whether public exports, functions/methods, parameters, exceptions, CLI options, and environment variables in the inventory are documented accurately.
+               - Check whether runtime requirements (e.g., `requires-python`, Node/Rust/Go versions, dependencies) match `pyproject.toml` / `package.json` / `Cargo.toml` / `go.mod` / `hacs.json`.
+               - Check whether Quick Start and Example snippets still work with current behavior (for instance, new authentication requirements or changed defaults).
+               - Ignore purely internal helpers (leading `_`), test-only helpers, and subjective phrasing style. Focus strictly on real omissions, broken examples, and outdated requirements.
+
+            3. Follow any extra repository guidance (if provided):
+               ${{ inputs.extra-instructions }}
+
+            4. Execute according to `mode = "${{ inputs.mode }}"`:
+               - If `mode` is `"pr"`:
+                 - If documentation is already accurate and complete, write `{"has_gaps": false, "summary": "No documentation gaps found"}` to `/tmp/docs-check-status.json`, print `No documentation gaps found`, and stop without creating a branch or PR.
+                 - Otherwise:
+                   - Create/reset branch `${{ steps.config.outputs.branch_name }}` from `origin/${{ steps.config.outputs.base_branch }}`:
+                     `git fetch origin ${{ steps.config.outputs.base_branch }} --depth=20 && git checkout -B ${{ steps.config.outputs.branch_name }} origin/${{ steps.config.outputs.base_branch }}`
+                   - Update ONLY documentation files matching `${{ inputs.docs-paths }}`. Never modify source code, tests, or lockfiles.
+                   - Validate modified files (e.g., `python3 -m json.tool` on any edited `.json` file) and confirm `git diff --name-only` contains only documentation files.
+                   - Stage, commit (`git commit -m "docs: sync documentation with codebase"`), and force-push (`git push -f origin ${{ steps.config.outputs.branch_name }}`).
+                   - Write a concise Markdown summary of the fixed gaps to `/tmp/docs-pr-body.md`.
+                   - Check `gh pr list --head ${{ steps.config.outputs.branch_name }} --base ${{ steps.config.outputs.base_branch }} --json number -q '.[0].number'`; if an open PR exists, update it with `gh pr edit`, otherwise create it with `gh pr create --base ${{ steps.config.outputs.base_branch }} --head ${{ steps.config.outputs.branch_name }} --title "docs: sync documentation with codebase" --body-file /tmp/docs-pr-body.md`.
+                   - Write `{"has_gaps": true, "summary": "Updated documentation and opened/updated sync PR"}` to `/tmp/docs-check-status.json`.
+               - If `mode` is `"report"`:
+                 - Do NOT edit repository files or push branches.
+                 - Write `/tmp/docs-check-status.json` as JSON with keys `has_gaps` (boolean), `summary` (string), and `findings` (list of concise strings).
+                 - If `has_gaps` is `true`:
+                   - When `GITHUB_EVENT_NAME` is `"pull_request"`, post or update a single comment containing marker `<!-- mqg-docs-check -->` on the PR using `gh pr comment` / `gh api`.
+                   - Otherwise (`push`, `schedule`, `workflow_dispatch`), check `gh issue list --state open --search "[docs] Documentation coverage gaps in:title" --json number -q '.[0].number'` and create or comment on that issue with the findings.
+
+      - name: Enforce docs coverage gate
+        if: inputs.fail-on-gaps
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import pathlib
+          import sys
+
+          status_file = pathlib.Path("/tmp/docs-check-status.json")
+          if not status_file.exists():
+              print("::error::Docs check status file (/tmp/docs-check-status.json) was not generated.")
+              sys.exit(1)
+
+          data = json.loads(status_file.read_text(encoding="utf-8"))
+          print("Docs check summary:", data.get("summary", ""))
+          if data.get("has_gaps"):
+              for item in data.get("findings", []):
+                  print(" -", item)
+              print("::error::Documentation gaps or stale entries detected.")
+              sys.exit(1)
+          print("✅ Documentation coverage check passed.")
+          PYEOF

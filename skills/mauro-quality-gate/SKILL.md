@@ -35,6 +35,7 @@ All repositories reuse centralized workflows from `MauroDruwel/quality-gate/.git
 - **`typescript-ci.yml`**: Node/pnpm test, lint, tsc typecheck, and production bundle.
 - **`python-ci.yml`**: Python 3.11-3.13 matrix, ruff format/lint, and pytest.
 - **`forge-ci.yml`**: OpenAPI 3.x schema validation, Cloudflare Forge SDK generation, zero-drift check (`git diff --exit-code`), and target SDK verification (Rust, Python, TypeScript).
+- **`docs-check.yml`**: Automated OpenCode-powered documentation coverage and drift check (`pr` mode opens/updates a `chore/sync-docs` PR; `report` mode comments on PRs or opens an issue).
 
 ### Example Caller Workflows
 
@@ -141,6 +142,32 @@ jobs:
       run-python-checks: true
       run-rust-checks: true
       run-typescript-checks: true
+```
+
+#### Automated Documentation Coverage & Sync (`.github/workflows/docs-check.yml`)
+```yaml
+name: Docs Coverage & Sync
+
+on:
+  push:
+    branches: [main]
+    paths: ['src/**', 'pyproject.toml', 'package.json']
+  schedule:
+    - cron: '15 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  docs-check:
+    uses: MauroDruwel/quality-gate/.github/workflows/docs-check.yml@main
+    with:
+      mode: 'pr'
+      docs-paths: 'README.md,docs'
 ```
 
 ---

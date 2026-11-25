@@ -1,0 +1,32 @@
+name: Docs Coverage & Sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "pyproject.toml"
+      - "package.json"
+      - "Cargo.toml"
+      - "go.mod"
+  schedule:
+    # Weekly on Monday at 06:15 UTC
+    - cron: "15 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  docs-check:
+    uses: MauroDruwel/quality-gate/.github/workflows/docs-check.yml@main
+    with:
+      mode: "pr"
+      docs-paths: "README.md,docs"

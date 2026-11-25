@@ -47,6 +47,7 @@ All repositories inherit centralized, maintained pipelines via GitHub Actions `w
 | **TypeScript CI** | `.github/workflows/typescript-ci.yml` | Matrix Node.js (20, 22), pnpm/npm caching, ESLint, TypeScript typecheck, Vitest/Jest execution, production build verification. |
 | **Python CI** | `.github/workflows/python-ci.yml` | Matrix Python (3.11, 3.12, 3.13), Ruff formatting and linting, and Pytest test execution. |
 | **Cloudflare Forge & OpenAPI CI** | `.github/workflows/forge-ci.yml` | OpenAPI 3.x schema validation, Cloudflare Forge SDK generation, zero-drift check (`git diff --exit-code`), and target SDK verification (Rust, Python, TypeScript). |
+| **Docs Coverage & Sync** | `.github/workflows/docs-check.yml` | Deterministic API/env-var inventory plus OpenCode LLM documentation audit (`pr` mode opens/updates a sync PR; `report` mode comments on PRs or opens an issue). |
 
 ### How to Use in Your Repository
 
@@ -141,6 +142,32 @@ jobs:
       check-drift: true
 ```
 
+#### Automated Documentation Coverage & Sync (`.github/workflows/docs-check.yml`)
+```yaml
+name: Docs Coverage & Sync
+
+on:
+  push:
+    branches: [main]
+    paths: ['src/**', 'pyproject.toml', 'package.json', 'Cargo.toml', 'go.mod']
+  schedule:
+    - cron: '15 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  docs-check:
+    uses: MauroDruwel/quality-gate/.github/workflows/docs-check.yml@main
+    with:
+      mode: 'pr'
+      docs-paths: 'README.md,docs'
+```
+
 ---
 
 ## 🔍 Automated Quality Gate Audit Tool
@@ -214,6 +241,7 @@ The `templates/` folder provides ready-to-use boilerplate for new or upgraded pr
 - **`templates/tauri/`**: Drop-in `ci.yml` and `release.yml` caller workflows.
 - **`templates/typescript/`**: Drop-in `ci.yml` caller workflow.
 - **`templates/python/`**: Drop-in `ci.yml` caller workflow.
+- **`templates/docs/`**: Drop-in `docs-check.yml` caller workflow for automated documentation coverage checks.
 
 ---
 
