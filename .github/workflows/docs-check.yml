@@ -401,8 +401,9 @@ jobs:
                   for path, items in sorted(mapping.items()):
                       out.append(f"- `{path}`: {', '.join(f'`{i}`' for i in items)}")
 
-          Path("/tmp/docs-inventory.md").write_text("\n".join(out) + "\n", encoding="utf-8")
-          print("Wrote /tmp/docs-inventory.md")
+          out_path = Path(os.environ.get("INVENTORY_OUTPUT", ".mqg-docs-inventory.md"))
+          out_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+          print(f"Wrote {out_path}")
           PYEOF
 
       - name: Run OpenCode docs check agent
@@ -416,7 +417,11 @@ jobs:
           prompt: |
             You are the Mauro Quality Gate documentation coverage and drift agent.
 
-            1. Read `/tmp/docs-inventory.md` first to inspect the project's public API surface, runtime/dependency constraints, environment variables, recent git changes, and existing documentation files.
+            Important workspace rules:
+            - Only read and write files inside the current repository working directory (never access `/tmp` or other external directories).
+            - Never stage or commit `.mqg-docs-*` temporary files (`git add` only documentation files by explicit path; never run `git add -A` or `git add .`).
+
+            1. Read `.mqg-docs-inventory.md` first to inspect the project's public API surface, runtime/dependency constraints, environment variables, recent git changes, and existing documentation files.
 
             2. Read the documentation files under `${{ inputs.docs-paths }}` and inspect the relevant source/config files to audit factual coverage and accuracy:
                - Check whether public exports, functions/methods, parameters, exceptions, CLI options, and environment variables in the inventory are documented accurately.
@@ -429,19 +434,19 @@ jobs:
 
             4. Execute according to `mode = "${{ inputs.mode }}"`:
                - If `mode` is `"pr"`:
-                 - If documentation is already accurate and complete, write `{"has_gaps": false, "summary": "No documentation gaps found"}` to `/tmp/docs-check-status.json`, print `No documentation gaps found`, and stop without creating a branch or PR.
+                 - If documentation is already accurate and complete, write `{"has_gaps": false, "summary": "No documentation gaps found"}` to `.mqg-docs-check-status.json`, print `No documentation gaps found`, and stop without creating a branch or PR.
                  - Otherwise:
                    - Create/reset branch `${{ steps.config.outputs.branch_name }}` from `origin/${{ steps.config.outputs.base_branch }}`:
                      `git fetch origin ${{ steps.config.outputs.base_branch }} --depth=20 && git checkout -B ${{ steps.config.outputs.branch_name }} origin/${{ steps.config.outputs.base_branch }}`
                    - Update ONLY documentation files matching `${{ inputs.docs-paths }}`. Never modify source code, tests, or lockfiles.
                    - Validate modified files (e.g., `python3 -m json.tool` on any edited `.json` file) and confirm `git diff --name-only` contains only documentation files.
-                   - Stage, commit (`git commit -m "docs: sync documentation with codebase"`), and force-push (`git push -f origin ${{ steps.config.outputs.branch_name }}`).
-                   - Write a concise Markdown summary of the fixed gaps to `/tmp/docs-pr-body.md`.
-                   - Check `gh pr list --head ${{ steps.config.outputs.branch_name }} --base ${{ steps.config.outputs.base_branch }} --json number -q '.[0].number'`; if an open PR exists, update it with `gh pr edit`, otherwise create it with `gh pr create --base ${{ steps.config.outputs.base_branch }} --head ${{ steps.config.outputs.branch_name }} --title "docs: sync documentation with codebase" --body-file /tmp/docs-pr-body.md`.
-                   - Write `{"has_gaps": true, "summary": "Updated documentation and opened/updated sync PR"}` to `/tmp/docs-check-status.json`.
+                   - Stage only the modified/created documentation files by explicit path, commit (`git commit -m "docs: sync documentation with codebase"`), and force-push (`git push -f origin ${{ steps.config.outputs.branch_name }}`).
+                   - Write a concise Markdown summary of the fixed gaps to `.mqg-docs-pr-body.md`.
+                   - Check `gh pr list --head ${{ steps.config.outputs.branch_name }} --base ${{ steps.config.outputs.base_branch }} --json number -q '.[0].number'`; if an open PR exists, update it with `gh pr edit`, otherwise create it with `gh pr create --base ${{ steps.config.outputs.base_branch }} --head ${{ steps.config.outputs.branch_name }} --title "docs: sync documentation with codebase" --body-file .mqg-docs-pr-body.md`.
+                   - Write `{"has_gaps": true, "summary": "Updated documentation and opened/updated sync PR"}` to `.mqg-docs-check-status.json`.
                - If `mode` is `"report"`:
-                 - Do NOT edit repository files or push branches.
-                 - Write `/tmp/docs-check-status.json` as JSON with keys `has_gaps` (boolean), `summary` (string), and `findings` (list of concise strings).
+                 - Do NOT edit tracked repository files or push branches.
+                 - Write `.mqg-docs-check-status.json` as JSON with keys `has_gaps` (boolean), `summary` (string), and `findings` (list of concise strings).
                  - If `has_gaps` is `true`:
                    - When `GITHUB_EVENT_NAME` is `"pull_request"`, post or update a single comment containing marker `<!-- mqg-docs-check -->` on the PR using `gh pr comment` / `gh api`.
                    - Otherwise (`push`, `schedule`, `workflow_dispatch`), check `gh issue list --state open --search "[docs] Documentation coverage gaps in:title" --json number -q '.[0].number'` and create or comment on that issue with the findings.
@@ -454,9 +459,9 @@ jobs:
           import pathlib
           import sys
 
-          status_file = pathlib.Path("/tmp/docs-check-status.json")
+          status_file = pathlib.Path(".mqg-docs-check-status.json")
           if not status_file.exists():
-              print("::error::Docs check status file (/tmp/docs-check-status.json) was not generated.")
+              print("::error::Docs check status file (.mqg-docs-check-status.json) was not generated.")
               sys.exit(1)
 
           data = json.loads(status_file.read_text(encoding="utf-8"))
@@ -468,3 +473,7 @@ jobs:
               sys.exit(1)
           print("✅ Documentation coverage check passed.")
           PYEOF
+
+      - name: Clean up temporary files
+        if: always()
+        run: rm -f .mqg-docs-inventory.md .mqg-docs-check-status.json .mqg-docs-pr-body.md

@@ -62,6 +62,9 @@ class TestDocsCheckWorkflow(unittest.TestCase):
         self.assertIsNone(re.search(r"^\s+secrets:\s*$", text, re.MULTILINE))
         # Fork PR safety guard
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
+        # Avoid /tmp reads/writes that trigger OpenCode external_directory ask prompts
+        self.assertNotIn("/tmp/", text)
+        self.assertIn(".mqg-docs-inventory.md", text)
 
     def test_docs_check_template_references_quality_gate(self):
         text = DOCS_TEMPLATE.read_text(encoding="utf-8")
@@ -116,11 +119,13 @@ class TestDocsCheckWorkflow(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            inventory_path = root / ".mqg-docs-inventory.md"
             env = os.environ.copy()
             env["DOCS_PATHS"] = "README.md,docs"
             env["SOURCE_PATHS"] = ""
             env["BASE_BRANCH"] = "main"
             env["EVENT_NAME"] = "workflow_dispatch"
+            env["INVENTORY_OUTPUT"] = str(inventory_path)
 
             proc = subprocess.run(
                 [sys.executable, "-c", script],
@@ -131,7 +136,7 @@ class TestDocsCheckWorkflow(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
-            inventory = Path("/tmp/docs-inventory.md").read_text(encoding="utf-8")
+            inventory = inventory_path.read_text(encoding="utf-8")
             self.assertIn("`README.md`", inventory)
             self.assertIn("`docs/pages/quick-start.mdx`", inventory)
             self.assertIn('requires-python=>=3.10', inventory)
