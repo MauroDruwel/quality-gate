@@ -443,7 +443,8 @@ jobs:
                    - Stage only the modified/created documentation files by explicit path, commit (`git commit -m "docs: sync documentation with codebase"`), and force-push (`git push -f origin ${{ steps.config.outputs.branch_name }}`).
                    - Write a concise Markdown summary of the fixed gaps to `.mqg-docs-pr-body.md`.
                    - Check `gh pr list --head ${{ steps.config.outputs.branch_name }} --base ${{ steps.config.outputs.base_branch }} --json number -q '.[0].number'`; if an open PR exists, update it with `gh pr edit`, otherwise create it with `gh pr create --base ${{ steps.config.outputs.base_branch }} --head ${{ steps.config.outputs.branch_name }} --title "docs: sync documentation with codebase" --body-file .mqg-docs-pr-body.md`.
-                   - Write `{"has_gaps": true, "summary": "Updated documentation and opened/updated sync PR"}` to `.mqg-docs-check-status.json`.
+                   - If `gh pr create` fails (for instance because GitHub Actions is not allowed to create PRs in repo settings), still record `{"has_gaps": true, "pr_error": "<reason>", "summary": "..."}` in `.mqg-docs-check-status.json` and exit non-zero after writing the file so the failure is visible.
+                   - Otherwise write `{"has_gaps": true, "summary": "Updated documentation and opened/updated sync PR"}` to `.mqg-docs-check-status.json`.
                - If `mode` is `"report"`:
                  - Do NOT edit tracked repository files or push branches.
                  - Write `.mqg-docs-check-status.json` as JSON with keys `has_gaps` (boolean), `summary` (string), and `findings` (list of concise strings).

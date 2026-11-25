@@ -170,6 +170,8 @@ jobs:
       docs-paths: 'README.md,docs'
 ```
 
+> Note: When using `mode: 'pr'`, ensure **Allow GitHub Actions to create and approve pull requests** is enabled in repository *Settings → Actions → General → Workflow permissions*.
+
 ---
 
 ## 3. Home Assistant & HACS Integration Standard (The "Frenck Checklist")

@@ -168,6 +168,8 @@ jobs:
       docs-paths: 'README.md,docs'
 ```
 
+> **Note:** For `mode: 'pr'`, enable **Allow GitHub Actions to create and approve pull requests** in the repository's *Settings → Actions → General → Workflow permissions*.
+
 ---
 
 ## 🔍 Automated Quality Gate Audit Tool
