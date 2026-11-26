@@ -65,6 +65,9 @@ class TestDocsCheckWorkflow(unittest.TestCase):
         # Avoid /tmp reads/writes that trigger OpenCode external_directory ask prompts
         self.assertNotIn("/tmp/", text)
         self.assertIn(".mqg-docs-inventory.md", text)
+        # Ensure agent is instructed to update code snippets and add real examples, not prose-only caveats
+        self.assertIn("Rewrite Broken or Incomplete Code Snippets Directly", text)
+        self.assertIn("Ensure Real, End-to-End Examples", text)
 
     def test_docs_check_template_references_quality_gate(self):
         text = DOCS_TEMPLATE.read_text(encoding="utf-8")
@@ -92,6 +95,17 @@ class TestDocsCheckWorkflow(unittest.TestCase):
             )
             (pkg / "auth.py").write_text(
                 "import os\n"
+                "from dataclasses import dataclass\n"
+                "class BaseError(Exception):\n"
+                "    pass\n"
+                "class AuthError(BaseError):\n"
+                "    pass\n"
+                "@dataclass\n"
+                "class UserProfile:\n"
+                "    email: str\n"
+                "    @property\n"
+                "    def domain(self) -> str:\n"
+                "        return self.email.split('@')[-1]\n"
                 "def login(user: str, password: str) -> bool:\n"
                 "    _ = os.environ.get('MYPKG_USER')\n"
                 "    _ = os.getenv('MYPKG_EMAIL')\n"
@@ -104,7 +118,7 @@ class TestDocsCheckWorkflow(unittest.TestCase):
                 '[project]\nname = "mypkg"\nversion = "0.3.0"\nrequires-python = ">=3.10"\n',
                 encoding="utf-8",
             )
-            (root / "README.md").write_text("# MyPkg\n", encoding="utf-8")
+            (root / "README.md").write_text("# MyPkg\n\n```python\nprint('hi')\n```\n", encoding="utf-8")
             docs_pages = root / "docs" / "pages"
             docs_pages.mkdir(parents=True)
             (docs_pages / "quick-start.mdx").write_text("# Quick Start\n", encoding="utf-8")
@@ -138,6 +152,7 @@ class TestDocsCheckWorkflow(unittest.TestCase):
 
             inventory = inventory_path.read_text(encoding="utf-8")
             self.assertIn("`README.md`", inventory)
+            self.assertIn("1 headings, 1 code blocks", inventory)
             self.assertIn("`docs/pages/quick-start.mdx`", inventory)
             self.assertIn('requires-python=>=3.10', inventory)
             self.assertIn("`MYPKG_USER`", inventory)
@@ -145,6 +160,8 @@ class TestDocsCheckWorkflow(unittest.TestCase):
             self.assertIn("`PUBLIC_API_URL`", inventory)
             self.assertIn("`login`", inventory)
             self.assertIn("`set_auth`", inventory)
+            self.assertIn("class AuthError(BaseError)", inventory)
+            self.assertIn("class UserProfile: attrs=[email, @property domain]", inventory)
             self.assertIn("`fetchStatus`", inventory)
             # Docs folder TS/JS config should be excluded from auto-detected source exports
             self.assertNotIn("ignoredThemeConfig", inventory)

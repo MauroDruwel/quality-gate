@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reusable OpenCode-powered documentation coverage and drift workflow (`.github/workflows/docs-check.yml`) with deterministic API/environment-variable inventory extraction and `pr` / `report` modes.
 - Starter template (`templates/docs/docs-check.yml`) and unit tests (`tests/test_workflows.py`) covering the workflow contract and inventory script.
 
+### Changed
+- Enhanced `docs-check.yml` inventory extraction (class inheritance, dataclass/annotated fields, `@property` attributes, and doc heading/code-block metrics) and strengthened the audit prompt to rewrite broken/incomplete code snippets directly, enforce real end-to-end examples, and keep API reference/navigation pages complete.
+
 ---
 
 ## [1.0.0] - 2026-09-17
